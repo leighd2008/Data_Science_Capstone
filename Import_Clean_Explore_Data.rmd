@@ -1,0 +1,136 @@
+---
+title: "Import_Explore_Data"
+author: "Diane Leigh"
+date: "September 3, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# ipak function: install and load multiple R packages.
+# check to see if packages are installed. Install them if they are not, then load them into the R session.
+
+ipak <- function(pkg){
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg)) 
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+}
+packages <- c("tidyverse", "readtext", "tm", "RColorBrewer", "SnowballC", "RWeka", "RWekajars", "NLP", "openNLP","stringi", "rJava")
+
+ipak(packages)
+
+```
+## Download SwiftKey data for the Data Science Specialization Capstone project.
+
+```{r load_data, results="asis", cache=TRUE}
+## Read training and data set
+fileUrl <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+
+if(!file.exists("Coursera-Swiftkey.zip")){
+  temp <- "Coursera-Swiftkey.zip"
+  download.file(fileUrl, temp)
+  DateDataDownloaded <- date()
+  saveRDS(DateDataDownloaded, file="DateDataDownloaded.rds")
+  unzip(temp)
+}else {
+  DateDataDownloaded <- readRDS("DateDataDownloaded.rds")
+} 
+
+```
+
+Data was downloaded `r DateDataDownloaded`
+
+## Import data
+
+Data has been downloaded and unzipped into the Data_Science_Capstone_Project folder. Here we use the rbinom function to sample 2% of the lines in each file for exploratory analysis.
+
+```{r import, warning=FALSE}
+if(!file.exists("cordata.txt")){
+  ds <- DirSource("./final/en_US")
+  drfnm <- dir("./final/en_US")
+  j=0
+  for(i in drfnm) {
+    j=j+1
+    fnm <- file(ds$filelist[j], open="rb")
+    y <- readLines(fnm, encoding = "UTF-8", skipNul=TRUE)
+    close(fnm)
+    set.seed(3948)
+    x <- y[rbinom(n = length(y), size = 1, prob = 0.02) == 1]
+    if (grepl(".blog.*", i)){
+      assign("blogs",x) 
+    }
+    else if (grepl(".news.*", i)){
+      assign("news",x) 
+    }
+    else if (grepl(".twitter.*", i)){
+      assign("twitter",x) 
+    }
+  }
+}else {
+  cordata <- readlines("cordata.txt")
+}
+
+#combine sampled lines from blogs, news and twitter into one corpus
+cordata <- c(blogs, news, twitter)
+
+#save the data sampled data to txt files
+writeLines(blogs, "blogs.txt")
+writeLines(news, "news.txt")
+writeLines(twitter, "twitter.txt")
+writeLines(cordata, "cordata.txt")
+
+```
+
+<<<<<<< HEAD
+
+
+
+
+=======
+## Clean the data sets
+A google search for "profanity list" led me to the web site http://www.cs.cmu.edu/~biglou/resources/ from Luis von Ahn's research group at CMU. The web site contained a link to an Offensive/Profane Word List, which I have used here.
+```{r clean_corpus}
+mycorpus <- Corpus(VectorSource(cordata))
+mycorpus <- tm_map(mycorpus, content_transformer(function(x) iconv(x, to="UTF-8", sub="byte")))
+mycorpus <- tm_map(mycorpus, content_transformer(tolower)) # converting to lowercase
+mycorpus <- tm_map(mycorpus, content_transformer(removePunctuation),
+                   preserve_intra_word_dashes=TRUE) # removing ponctuation
+
+fileUrl<- "https://www.cs.cmu.edu/~biglou/resources/bad-words.txt"
+temp <- "profanity.txt"
+download.file(fileUrl, temp)
+profanity <- readLines("profanity.txt")
+mycorpus <- tm_map(mycorpus,removeWords, profanity)
+mycorpus <- tm_map(mycorpus, content_transformer(removeNumbers)) # removing numbers
+
+## removing URLs 
+removeURL <- function(x) gsub("http[[:alnum:]]*", "", x)
+mycorpus <- tm_map(mycorpus, content_transformer(removeURL))
+
+mycorpus <- tm_map(mycorpus, removeWords, stopwords("english")) # removing stop words
+mycorpus <- tm_map(mycorpus, stripWhitespace) ## Stripping unnecessary whitespace 
+mycorpus2 <- tm_map(mycorpus, PlainTextDocument) 
+
+saveRDS(mycorpus2, file = "mycorpus.RData")
+
+```
+
+```{r tokenization}
+mycorpusmem <- readRDS("mycorpus.RData")
+finalcorpus <-data.frame(text=unlist(mycorpus2),stringsAsFactors = FALSE)
+
+fctoken <- NGramTokenizer(finalcorpus, Weka_control(min = 1, max = 1,delimiters = " \\r\\n\\t.,;:\"()?!"))
+fctoken <- data.frame(table(fctoken))
+fctoken <- fctoken[order(fctoken$Freq,decreasing = TRUE),]
+names(fctoken) <- c("word1", "freq")
+head(fctoken)
+fctoken$word1 <- as.character(fctoken$word1)
+
+write.csv(fctoken[fctoken$freq > 1,],"fctoken.csv",row.names=F)
+fctoken <- read.csv("fctoken.csv",stringsAsFactors = F)
+saveRDS(fctoken, file = "fctoken.RData")
+
+```
+>>>>>>> parent of 157ce5b... week 2

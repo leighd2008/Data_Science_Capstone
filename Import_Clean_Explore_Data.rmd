@@ -17,8 +17,7 @@ ipak <- function(pkg){
         install.packages(new.pkg, dependencies = TRUE)
     sapply(pkg, require, character.only = TRUE)
 }
-packages <- c("tidyverse", "readtext", "tm", "RColorBrewer", "SnowballC", "RWeka", "RWekajars", "NLP", "openNLP","stringi", "rJava")
-
+packages <- c("tidyverse", "readtext", "tm", "RColorBrewer", "SnowballC", "RWeka", "RWekajars", "NLP", "openNLP","stringi", "rJava", "R.utils", "stringr", "tidytext", "scales")
 ipak(packages)
 
 ```
@@ -47,90 +46,125 @@ Data was downloaded `r DateDataDownloaded`
 Data has been downloaded and unzipped into the Data_Science_Capstone_Project folder. Here we use the rbinom function to sample 2% of the lines in each file for exploratory analysis.
 
 ```{r import, warning=FALSE}
-if(!file.exists("cordata.txt")){
+if(!file.exists("./datafiles/cordata.RData")){
   ds <- DirSource("./final/en_US")
   drfnm <- dir("./final/en_US")
-  j=0
+  flInfo <- data.frame()
+  sampInfo <- data.frame()
+    j=0
   for(i in drfnm) {
     j=j+1
+    flInfo[j,1] <- drfnm[j]
+    flInfo[j,2] <- file.info(ds$filelist[j])$size / 1024^2 # Megabytes
     fnm <- file(ds$filelist[j], open="rb")
     y <- readLines(fnm, encoding = "UTF-8", skipNul=TRUE)
+    flInfo[j,3] <- length(y)
     close(fnm)
     set.seed(3948)
     x <- y[rbinom(n = length(y), size = 1, prob = 0.02) == 1]
+    flInfo[j,4] <- sum(stri_count_words(y))
+    flInfo[j,5] <- max(nchar(y))
     if (grepl(".blog.*", i)){
       assign("blogs",x) 
+      sampInfo[j,1] <- "blogs"
     }
     else if (grepl(".news.*", i)){
-      assign("news",x) 
+      assign("news",x)
+      sampInfo[j,1] <- "news"
     }
     else if (grepl(".twitter.*", i)){
       assign("twitter",x) 
+      sampInfo[j,1] <- "twitter"
     }
+    sampInfo[j,2] <- length(x)
+    sampInfo[j,3] <- sum(stri_count_words(x))
+    sampInfo[j,4] <- max(nchar(x))
   }
+  colnames(flInfo) <- c("File_Name", "Size_(MB)", "Num_of_Lines", "Num_of_Words", "Max_Characters")
+  colnames(sampInfo) <- c("File_Name", "Num_of_Lines", "Num_of_Words", "Max_Characters")
+  #combine sampled lines from blogs, news and twitter into one corpus
+  cordata <- c(blogs, news, twitter)
+  #save the data sampled data to RData files
+  mkdirs("datafiles")
+  saveRDS(blogs, "./datafiles/blogs.RData")
+  saveRDS(news, "./datafiles/news.RData")
+  saveRDS(twitter, "./datafiles/twitter.RData")
+  saveRDS(cordata, "./datafiles/cordata.RData")
+  saveRDS(flInfo, file = "./datafiles/flInfo.RData")
+  saveRDS(sampInfo, file = "./datafiles/sampInfo.RData")
+  # clean environment
+  rm(drfnm, ds, fnm, i, j, x, y)
 }else {
-  cordata <- readlines("cordata.txt")
+  cordata <- readRDS("./datafiles/cordata.RData")
+  blogs <- readRDS("./datafiles/blogs.RData")
+  news <- readRDS("./datafiles/news.RData")
+  twitter <- readRDS("./datafiles/twitter.RData")
+  flInfo <- readRDS("./datafiles/flInfo.RData")
+  sampInfo <- readRDS("./datafiles/sampInfo.RData")
 }
 
-#combine sampled lines from blogs, news and twitter into one corpus
-cordata <- c(blogs, news, twitter)
+```
 
-#save the data sampled data to txt files
-writeLines(blogs, "blogs.txt")
-writeLines(news, "news.txt")
-writeLines(twitter, "twitter.txt")
-writeLines(cordata, "cordata.txt")
+```{r tidydata}
+# convert variables to data frames, one line per row
+blogs_df <- data_frame(text = blogs) %>% mutate(linenumber = row_number())
+news_df <- data_frame(text = news) %>% mutate(linenumber = row_number())
+twitter_df <- data_frame(text = twitter) %>% mutate(linenumber = row_number())
+
+# convert variables to one word per line (tokenization)
+data("stop_words")
+tidy_blog <- blogs_df %>% unnest_tokens(word, text) %>% anti_join(stop_words)
+tidy_news <- news_df %>% unnest_tokens(word, text) %>% anti_join(stop_words)
+tidy_twitter <- twitter_df %>% unnest_tokens(word,text)%>%anti_join(stop_words) 
+```
+
+
+```{r plot_word_count}
+# plot word frequencies
+blog_frq <- tidy_blog %>% count(word, sort = TRUE) %>% filter(n > 600) %>%
+  mutate(word = reorder(word, n)) %>% ggplot(aes(word, n)) + geom_col() +
+  xlab(NULL) + ggtitle("The most common words in our blog sample") +
+  coord_flip()
+
+news_frq <- tidy_news %>% count(word, sort = TRUE) %>% filter(n > 600) %>%
+  mutate(word = reorder(word, n)) %>% ggplot(aes(word, n)) + geom_col() +
+  xlab(NULL) + ggtitle("The most common words in our news sample") + 
+  coord_flip()
+
+twitter_frq <- tidy_twitter %>% count(word, sort = TRUE) %>% 
+  filter(n > 600) %>% mutate(word = reorder(word, n)) %>% 
+  ggplot(aes(word, n)) + geom_col() + xlab(NULL) +
+  ggtitle("The most common words in our twitter sample") + coord_flip()
+
+blog_frq
+news_frq
+twitter_frq
 
 ```
 
-<<<<<<< HEAD
+```{r plot_comparison, warnings=FALSE}
+frequency <- bind_rows(mutate(tidy_blog, Text_Source = "Blogs"),
+  mutate(tidy_twitter, Text_Source = "Twitter"), 
+  mutate(tidy_news, Text_Source = "xNews")) %>% 
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(Text_Source, word) %>% group_by(Text_Source) %>%
+  mutate(proportion = n / sum(n)) %>% select(-n) %>% 
+  spread(Text_Source, proportion) %>% 
+  gather(Text_Source, proportion, `Blogs`:`Twitter`)
 
+freq_comp <- ggplot(frequency, aes(x = proportion, y = `xNews`, 
+  color = abs(`xNews` - proportion))) + 
+  geom_abline(color = "gray40", lty = 2) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_gradient(limits = c(0, 0.001), low = "darkslategray4", 
+                       high = "gray75") +
+  facet_wrap(~Text_Source, ncol = 2) + theme(legend.position="none") +
+  labs(y = "News", x = NULL)
 
-
-
-=======
-## Clean the data sets
-A google search for "profanity list" led me to the web site http://www.cs.cmu.edu/~biglou/resources/ from Luis von Ahn's research group at CMU. The web site contained a link to an Offensive/Profane Word List, which I have used here.
-```{r clean_corpus}
-mycorpus <- Corpus(VectorSource(cordata))
-mycorpus <- tm_map(mycorpus, content_transformer(function(x) iconv(x, to="UTF-8", sub="byte")))
-mycorpus <- tm_map(mycorpus, content_transformer(tolower)) # converting to lowercase
-mycorpus <- tm_map(mycorpus, content_transformer(removePunctuation),
-                   preserve_intra_word_dashes=TRUE) # removing ponctuation
-
-fileUrl<- "https://www.cs.cmu.edu/~biglou/resources/bad-words.txt"
-temp <- "profanity.txt"
-download.file(fileUrl, temp)
-profanity <- readLines("profanity.txt")
-mycorpus <- tm_map(mycorpus,removeWords, profanity)
-mycorpus <- tm_map(mycorpus, content_transformer(removeNumbers)) # removing numbers
-
-## removing URLs 
-removeURL <- function(x) gsub("http[[:alnum:]]*", "", x)
-mycorpus <- tm_map(mycorpus, content_transformer(removeURL))
-
-mycorpus <- tm_map(mycorpus, removeWords, stopwords("english")) # removing stop words
-mycorpus <- tm_map(mycorpus, stripWhitespace) ## Stripping unnecessary whitespace 
-mycorpus2 <- tm_map(mycorpus, PlainTextDocument) 
-
-saveRDS(mycorpus2, file = "mycorpus.RData")
+suppressWarnings(print(freq_comp))
 
 ```
 
-```{r tokenization}
-mycorpusmem <- readRDS("mycorpus.RData")
-finalcorpus <-data.frame(text=unlist(mycorpus2),stringsAsFactors = FALSE)
-
-fctoken <- NGramTokenizer(finalcorpus, Weka_control(min = 1, max = 1,delimiters = " \\r\\n\\t.,;:\"()?!"))
-fctoken <- data.frame(table(fctoken))
-fctoken <- fctoken[order(fctoken$Freq,decreasing = TRUE),]
-names(fctoken) <- c("word1", "freq")
-head(fctoken)
-fctoken$word1 <- as.character(fctoken$word1)
-
-write.csv(fctoken[fctoken$freq > 1,],"fctoken.csv",row.names=F)
-fctoken <- read.csv("fctoken.csv",stringsAsFactors = F)
-saveRDS(fctoken, file = "fctoken.RData")
-
-```
->>>>>>> parent of 157ce5b... week 2

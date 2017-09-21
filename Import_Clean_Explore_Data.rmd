@@ -168,3 +168,14 @@ suppressWarnings(print(freq_comp))
 
 ```
 
+```{r corrdata}
+cor.test(data = frequency[frequency$Text_Source == "Blogs",],
+         ~ proportion + `xNews`)
+cor.test(data = frequency[frequency$Text_Source == "Twitter",],
+         ~ proportion + `xNews`)
+cor.test(data = frequency[frequency$Text_Source == "Blogs",],
+         ~ proportion + `xNews`)
+cor.test(data = frequency[frequency$Text_Source == "Twitter",],
+         ~ proportion + `xNews`)
+
+```

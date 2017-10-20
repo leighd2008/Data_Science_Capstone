@@ -17,7 +17,9 @@ ipak <- function(pkg){
         install.packages(new.pkg, dependencies = TRUE)
     sapply(pkg, require, character.only = TRUE)
 }
-packages <- c("tidyverse", "readtext", "tm", "RColorBrewer", "SnowballC", "RWeka", "RWekajars", "NLP", "openNLP","stringi", "rJava", "R.utils", "stringr", "tidytext", "scales")
+
+packages <- c("tidyverse", "readtext", "tm", "RColorBrewer", "SnowballC", "RWeka", "RWekajars", "NLP", "openNLP","stringi", "rJava", "R.utils", "stringr", "tidytext", "scales", "wordnet", "igraph", "ggraph", "quanteda", "data.table")
+
 ipak(packages)
 
 ```
@@ -46,7 +48,7 @@ Data was downloaded `r DateDataDownloaded`
 Data has been downloaded and unzipped into the Data_Science_Capstone_Project folder. Here we use the rbinom function to sample 2% of the lines in each file for exploratory analysis.
 
 ```{r import, warning=FALSE}
-if(!file.exists("./datafiles/cordata.RData")){
+if(!file.exists("./datafiles/corpusdata.RData")){
   ds <- DirSource("./final/en_US")
   drfnm <- dir("./final/en_US")
   flInfo <- data.frame()
@@ -83,99 +85,117 @@ if(!file.exists("./datafiles/cordata.RData")){
   colnames(flInfo) <- c("File_Name", "Size_(MB)", "Num_of_Lines", "Num_of_Words", "Max_Characters")
   colnames(sampInfo) <- c("File_Name", "Num_of_Lines", "Num_of_Words", "Max_Characters")
   #combine sampled lines from blogs, news and twitter into one corpus
-  cordata <- c(blogs, news, twitter)
-  #save the data sampled data to RData files
+  mycorpusblogs <- corpus(blogs)
+  docvars(mycorpusblogs, "Source") <- "Blog"
+  mycorpusnews <- corpus(news)
+  docvars(mycorpusnews, "Source") <- "News"
+  mycorpustwitter <- corpus(twitter)
+  docvars(mycorpustwitter, "Source") <- "Tweet"
+  corpusdata <- mycorpusblogs + mycorpusnews + mycorpustwitter
+  #save the sampled data to RData files
   mkdirs("datafiles")
-  saveRDS(blogs, "./datafiles/blogs.RData")
-  saveRDS(news, "./datafiles/news.RData")
-  saveRDS(twitter, "./datafiles/twitter.RData")
-  saveRDS(cordata, "./datafiles/cordata.RData")
+  saveRDS(mycorpusblogs, "./datafiles/mycorpusblogs.RData")
+  saveRDS(mycorpusnews, "./datafiles/mycorpusnews.RData")
+  saveRDS(mycorpustwitter, "./datafiles/mycorpustwitter.RData")
+  saveRDS(corpusdata, "./datafiles/corpusdata.RData")
   saveRDS(flInfo, file = "./datafiles/flInfo.RData")
   saveRDS(sampInfo, file = "./datafiles/sampInfo.RData")
-  # clean environment
-  rm(drfnm, ds, fnm, i, j, x, y)
+  #clean environment
+  rm(drfnm, ds, fnm, i, j, x, y, news, twitter, blogs, mycorpusblogs,
+     mycorpusnews, mycorpustwitter)
 }else {
-  cordata <- readRDS("./datafiles/cordata.RData")
-  blogs <- readRDS("./datafiles/blogs.RData")
-  news <- readRDS("./datafiles/news.RData")
-  twitter <- readRDS("./datafiles/twitter.RData")
+  corpusdata <- readRDS("./datafiles/corpusdata.RData")
+  #mycorpusblogs <- readRDS("./datafiles/mycorpusblogs.RData")
+  #mycorpusnews <- readRDS("./datafiles/mycorpusnews.RData")
+  #mycorpustwitter <- readRDS("./datafiles/mycorpustwitter.RData")
   flInfo <- readRDS("./datafiles/flInfo.RData")
   sampInfo <- readRDS("./datafiles/sampInfo.RData")
 }
 
 ```
 
+
 ```{r tidydata}
-# convert variables to data frames, one line per row
-blogs_df <- data_frame(text = blogs) %>% mutate(linenumber = row_number())
-news_df <- data_frame(text = news) %>% mutate(linenumber = row_number())
-twitter_df <- data_frame(text = twitter) %>% mutate(linenumber = row_number())
+# convert variables to data frames, one token(word) per row, remove profanity
+# numbers, punctuation, symbols, separators hashtags and URLs.
 
-# convert variables to one word per line (tokenization)
-data("stop_words")
-tidy_blog <- blogs_df %>% unnest_tokens(word, text) %>% anti_join(stop_words)
-tidy_news <- news_df %>% unnest_tokens(word, text) %>% anti_join(stop_words)
-tidy_twitter <- twitter_df %>% unnest_tokens(word,text)%>%anti_join(stop_words) 
-```
+if(!file.exists("profanity.txt")){
+  fileUrl<- "https://www.cs.cmu.edu/~biglou/resources/bad-words.txt"
+  temp <- "profanity.txt"
+  download.file(fileUrl, temp)
+}
 
+profanity <- readLines("profanity.txt")
 
-```{r plot_word_count}
+totdfm <- dfm(corpusdata, remove = profanity,
+       remove_numbers = TRUE, remove_punct = TRUE, removeSymbols=TRUE,
+       remove_separators = TRUE, removeTwitter=TRUE, remove_url=TRUE,
+       include_docvars = TRUE)
+
+totfrq <- as.data.table(docfreq(totdfm), keep.rownames = TRUE) %>%  
+     setnames(c("V1","V2"), c("word", "n")) %>% setorder(-n)
+
 # plot word frequencies
-blog_frq <- tidy_blog %>% count(word, sort = TRUE) %>% filter(n > 600) %>%
-  mutate(word = reorder(word, n)) %>% ggplot(aes(word, n)) + geom_col() +
-  xlab(NULL) + ggtitle("The most common words in our blog sample") +
-  coord_flip()
 
-news_frq <- tidy_news %>% count(word, sort = TRUE) %>% filter(n > 600) %>%
-  mutate(word = reorder(word, n)) %>% ggplot(aes(word, n)) + geom_col() +
-  xlab(NULL) + ggtitle("The most common words in our news sample") + 
-  coord_flip()
+tot_frq <- totfrq %>% filter(n > 5000) %>% mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) + geom_col() + xlab(NULL) + coord_flip() +
+  ggtitle("Words with frequency > 5000 in our courpus") 
 
-twitter_frq <- tidy_twitter %>% count(word, sort = TRUE) %>% 
-  filter(n > 600) %>% mutate(word = reorder(word, n)) %>% 
-  ggplot(aes(word, n)) + geom_col() + xlab(NULL) +
-  ggtitle("The most common words in our twitter sample") + coord_flip()
-
-blog_frq
-news_frq
-twitter_frq
+tot_frq
 
 ```
 
-```{r plot_comparison, warnings=FALSE}
-frequency <- bind_rows(mutate(tidy_blog, Text_Source = "Blogs"),
-  mutate(tidy_twitter, Text_Source = "Twitter"), 
-  mutate(tidy_news, Text_Source = "xNews")) %>% 
-  mutate(word = str_extract(word, "[a-z']+")) %>%
-  count(Text_Source, word) %>% group_by(Text_Source) %>%
-  mutate(proportion = n / sum(n)) %>% select(-n) %>% 
-  spread(Text_Source, proportion) %>% 
-  gather(Text_Source, proportion, `Blogs`:`Twitter`)
 
-freq_comp <- ggplot(frequency, aes(x = proportion, y = `xNews`, 
-  color = abs(`xNews` - proportion))) + 
-  geom_abline(color = "gray40", lty = 2) +
-  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) +
-  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
-  scale_x_log10(labels = percent_format()) +
-  scale_y_log10(labels = percent_format()) +
-  scale_color_gradient(limits = c(0, 0.001), low = "darkslategray4", 
-                       high = "gray75") +
-  facet_wrap(~Text_Source, ncol = 2) + theme(legend.position="none") +
-  labs(y = "News", x = NULL)
 
-suppressWarnings(print(freq_comp))
+```{r bigrams}
+
+# convert variables to one bigram per line (tokenization)
+bi_totdfm <- dfm(corpusdata, remove = profanity, ngrams = 2,
+       remove_numbers = TRUE, remove_punct = TRUE, removeSymbols=TRUE,
+       remove_separators = TRUE, removeTwitter=TRUE, remove_url=TRUE,
+       include_docvars = TRUE)
+
+bi_tot <- as.data.table(docfreq(bi_totdfm), keep.rownames = TRUE) %>%  
+  setnames(c("V1","V2"), c("word", "n")) %>% setorder(-n)
+
+
+# plot bi-gram frequencies
+bi_tot_frq <- bi_tot %>% filter(n > 1500) %>% 
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) + geom_col() + xlab(NULL) + coord_flip() +
+  ggtitle("Bi-grams with frequency > 1500 in our courpus")
+
+bi_tot_frq
+
+# separate bigram words to separate columns 
+
+bi_tot <- separate(bi_tot, word, c("word1", "word2"), sep = "_") 
 
 ```
 
-```{r corrdata}
-cor.test(data = frequency[frequency$Text_Source == "Blogs",],
-         ~ proportion + `xNews`)
-cor.test(data = frequency[frequency$Text_Source == "Twitter",],
-         ~ proportion + `xNews`)
-cor.test(data = frequency[frequency$Text_Source == "Blogs",],
-         ~ proportion + `xNews`)
-cor.test(data = frequency[frequency$Text_Source == "Twitter",],
-         ~ proportion + `xNews`)
+
+```{r trigrams}
+
+# convert variables to one trigram per line (tokenization)
+tri_totdfm <- dfm(corpusdata, remove = profanity, ngrams = 3,
+       remove_numbers = TRUE, remove_punct = TRUE, removeSymbols=TRUE,
+       remove_separators = TRUE, removeTwitter=TRUE, remove_url=TRUE,
+       include_docvars = TRUE)
+
+tri_tot <- as.data.table(docfreq(tri_totdfm), keep.rownames = TRUE) %>%  
+  setnames(c("V1","V2"), c("word", "n")) %>% setorder(-n)
+
+
+# plot tri-gram frequencies
+tri_tot_frq <- tri_tot %>% filter(n > 200) %>% 
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) + geom_col() + xlab(NULL) + coord_flip() +
+  ggtitle("Tri-grams with frequency > 200 in our courpus")
+
+tri_tot_frq
+
+# separate trigram words to separate columns 
+
+tri_tot <- separate(tri_tot, word, c("word1", "word2"), sep = "_") 
 
 ```

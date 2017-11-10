@@ -1,0 +1,476 @@
+---
+title: "processing full data set"
+author: "Diane Leigh"
+date: "September 3, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+################################################################################
+
+# ipak function: install and load multiple R packages.
+# check to see if packages are installed. Install them if they are not, then load them into the R session.
+
+ipak <- function(pkg){
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg)) 
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+}
+packages <- c("tidyverse", "quanteda", "data.table", "DT", "tm", "stringi", "R.utils", "stringr", "dplyr","NLP")
+ipak(packages)
+
+```
+
+
+
+## Import and sampling of the data
+
+Once the Data had been downloaded and unzipped into the Data_Science_Capstone folder. The rbinom function was used to sample 2% of the lines in each file and combine them into a single corpus for exploratory analysis. 
+
+```{r import, warning=FALSE, cache=TRUE, results="asis"}
+
+# Import and sampling of the data
+
+if(!file.exists("./corpora/2blog1.RData")){
+  ds <- DirSource("./final/en_US")
+  drfnm <- dir("./final/en_US")
+  j=0
+  mkdirs("corpora")
+  mkdirs("testcorpora")
+  for(i in drfnm) {
+    j=j+1
+    fnm <- file(ds$filelist[j], open="rb")
+    x <- readLines(fnm, encoding = "UTF-8", skipNul=TRUE)
+    close(fnm)
+    nms<-c("blog","news","twitter")
+    endtest<- floor(length(x)/5)
+    end1<-endtest*2
+    end2<-endtest*3
+    end3<-endtest*4
+    
+    for(k in nms){
+      if (grepl(paste("*.",k,".*",sep=""), i)){
+        onm<-paste(k,"test",sep = "")
+        temp<-corpus(x[1:endtest])
+        saveRDS(temp,paste("./testcorpora/",onm,".RData", sep = ""))
+        onm<-paste(k,"1",sep = "")
+        temp<-corpus(x[endtest+1:end1])
+        saveRDS(temp,paste("./corpora/",onm,".RData", sep = ""))
+        onm<-paste(k,"2",sep = "")
+        temp<-corpus(x[end1+1:end2])
+        saveRDS(temp,paste("./corpora/",onm,".RData", sep = ""))
+        onm<-paste(k,"3",sep = "")
+        temp<-corpus(x[end2+1:end3])
+        saveRDS(temp,paste("./corpora/",onm,".RData", sep = ""))
+        onm<-paste(k,"4",sep = "")
+        temp<-corpus(x[end3+1:length(x)])
+        saveRDS(temp,paste("./corpora/",onm,".RData", sep = ""))
+      }
+    }
+  }
+    # clean environment
+  rm(list = ls())
+}
+
+```
+
+# Cleaning the data
+
+The package "quanteda" was used to clean up the data, removing stopwords, profanity, numbers, punctuation, separators and URLs. 
+```{r NLPfuns}
+
+makeSentences <- function(input) {
+  output <- tokens(input, what = "sentence", 
+                   remove_numbers = TRUE, 
+                   remove_punct = TRUE, 
+                   remove_separators = TRUE,
+                   remove_twitter = TRUE, 
+                   remove_hyphens = TRUE)
+  unlist(output)
+}
+
+makeTokens <- function(input, n = 1L) {
+  tokens(input, what = "word", 
+         remove_numbers = TRUE,
+         remove_punct = TRUE, 
+         remove_separators = TRUE,
+         remove_twitter = FALSE, 
+         remove_hyphens = TRUE,
+         ngrams = n)
+}
+```
+
+
+```{r allbigrams, warnings=FALSE, cache=TRUE}
+
+# convert variables to one word per line (tokenization) keeping stop words
+
+#I don't have enough memory to process these so each one has to be done individually some split in half befor creating ngrams.  k = ngram, ngrm and srce are text for file names. Memory doesn't clear so need to shut down and restart RStudio each time.
+
+#initial clean up and tokenization of blogs, twitter and news
+
+drfnm <- dir("./corpora")
+
+grmnms<-c("uni","bi","tri", "tetra", "penta", "hexa")
+
+for(i in drfnm) {
+  nms<-c("blog","news","twitter")
+  for(j in nms){
+    if (grepl(paste("^",j,".*",sep=""), i)){
+      srce<-j
+      break
+    }
+  }
+  corpusdata <- readRDS(paste("./corpora/",i,sep=""))
+  sentences <- makeSentences(corpusdata)
+  rm(corpusdata)
+  for(k in 6){
+    tkz <- makeTokens(sentences, k)
+    #sentences <- readRDS("./sentences.RData")# read totdfm
+    gc()
+    my_dfm <-  dfm(tkz)
+    rm(tkz)
+    #strip extra spaces
+    colnames(my_dfm) <- str_replace_all(colnames(my_dfm),"[\\s]+", "")
+    #strip extra "_"
+    colnames(my_dfm) <- stri_replace_all_regex(colnames(my_dfm), "_{2,}", "_")
+    #strip leading "_"
+    colnames(my_dfm) <- stri_replace_all_regex(colnames(my_dfm), "^_{1,}", "")
+    #strip trailing "_"
+    colnames(my_dfm) <- stri_replace_all_regex(colnames(my_dfm), "_{1,}$", "")
+    
+    dfm_compress(my_dfm)
+    gc()
+    dtNgrams <- data.table(ngram = featnames(my_dfm), frequency=colSums(my_dfm),   keep.rownames = F, stringsAsFactors = F)
+    rm(my_dfm)
+    gc()
+    if(k>1){
+      dtNgrams <- dtNgrams[frequency >1,]
+      dtNgrams[, ngramsize := length(strsplit(ngram, "_")[[1]]), by = ngram]
+      dtNgrams <- dtNgrams[ngramsize ==k,]
+      dtNgrams[, base := strsplit(ngram, "_[^_]+$")[[1]], by = ngram]
+      dtNgrams[, prediction := tstrsplit(ngram, paste(base, "_", sep = ""), 
+                                   fixed = T, keep = 2)[[1]], by = ngram]
+    }else{
+      dtNgrams[, prediction := ngram]
+    }
+    
+    setorder(dtNgrams, -frequency)
+    
+    ngrm<-grmnms[k] 
+    saveRDS(dtNgrams, paste("./ngrams/", ngrm, i, sep=""))
+    rm(dtNgrams)
+    gc()
+  }
+}
+
+```
+
+
+
+
+
+
+
+```{r comb_ngrams}
+#Read and combine ngrams 
+unigrams <-data.table()
+bigrams <- data.table()
+trigrams <- data.table()
+tetragrams <- data.table()
+pentagrams <- data.table()
+hexagrams <- data.table()
+
+drfnm <- dir("./ngrams")
+nms<-c("uni","bi","tri","tetra", "penta", "hexa")
+
+for(i in drfnm) {
+  temp <- readRDS(paste("./ngrams/",i, sep=""))
+  if (grepl("^uni.*", i)){
+    unigrams <- rbind(unigrams, temp)
+  }
+  if (grepl("^bi.*", i)){
+    bigrams <- rbind(bigrams, temp)
+  }
+  else if (grepl("^tri.*", i)){
+    trigrams <- rbind(trigrams, temp)
+  }
+  else if (grepl("^tetra.*", i)){
+    tetragrams <- rbind(tetragrams, temp) 
+  }
+  else if (grepl("^penta.*", i)){
+    pentagrams <- rbind(pentagrams, temp) 
+  }
+  else if (grepl("^hexa.*", i)){
+    hexagrams <- rbind(hexagrams, temp) 
+  }
+}
+
+#combine duplicate ngram frequencys
+unigrams <- aggregate(frequency~., unigrams, FUN=sum) %>% setorder(-frequency) %>% as.data.table()
+bigrams <- aggregate(frequency~., bigrams, FUN=sum) %>% setorder(-frequency) %>% as.data.table()
+trigrams <- aggregate(frequency~., trigrams, FUN=sum)%>% setorder(-frequency) %>% as.data.table()
+tetragrams <- aggregate(frequency~., tetragrams, FUN=sum)%>% setorder(-frequency) %>% as.data.table()
+pentagrams <- aggregate(frequency~., pentagrams, FUN=sum)%>% setorder(-frequency) %>% as.data.table()
+hexagrams <- aggregate(frequency~., hexagrams, FUN=sum)%>% setorder(-frequency)
+rm(temp, drfnm, i) %>% as.data.table()
+
+# save combined ngrams for use in app
+mkdirs("forApp")
+saveRDS(unigrams, "./forApp/unigrams.rdata")
+saveRDS(bigrams, "./forApp/bigrams.rdata")
+saveRDS(trigrams, "./forApp/trigrams.rdata")
+saveRDS(tetragrams, "./forApp/tetragrams.rdata")
+saveRDS(pentagrams, "./forApp/pentagrams.rdata")
+saveRDS(hexagrams, "./forApp/hexagrams.rdata")
+
+```
+Katz's Backoff Model implementation in R
+
+Katz's BackOff Model is useful in N-gram language modeling to estimate the conditional probability of a word, given its history (actually, its preceding words, normally 2-3-4 words). The problem is that the corpus for training must be large to cover as much the diversity of language as possible. Nevertheless, there are cases where "large" is not "large enough". Katz's approach is to fall back to lower-order N-gram in this case.
+
+However, one cannot just fall back like this because this naive approach is unfair. Let's say: A-B-C appears 15 times, while A-B-? totally appear 100 times. As a result, Probability(A-B-C|A-B) = 15%. But A-B-N does not appear, so we fall back to B-N and similarly, find that Probability(B-N|B) = 40%. It is unfair because "A-B" gives more context than just "B", but it is NOT chosen!
+
+Katz fixes this issue by redistributing some probability of high-order N-gram to lower-order N-gram, so that all of the probabilities accumulate to 1. But first we have to reap some probability of the high-order N-gram, making it available to lower-order N-gram. It is done by using Good-Turing Discounting.
+
+After having some left-over probability for lower-order N-gram, we distribute it fairly. That is, in the lower-order N-gram, the N-grams who have more probability to appear will have more share in this left-over probability.
+
+The Katz's approach makes sense.
+```{r funcDisc}
+
+# Calculate the remaining probability (thanks to discounting...).
+# Given that the input is grouped based on firstTerms already.
+calcLeftOverProb = function(prediction, frequency, discount){
+  all_freq = sum(frequency)
+  
+  return(1-sum((discount*frequency)/all_freq))
+}
+
+```
+
+
+```{r calculateDiscount, warnings=FALSE, cache=TRUE}
+
+# redistribution of some probabilities of high-order N-gram to lower-order N-gram, so that all of the probabilities accumulate to 1. But first we have to reap some probability of the high-order N-gram, making it available to lower-order N-gram. It is done by using Good-Turing Discounting.
+# Now we make extended 3-gram table with Discount column and Remaining Probabilities.
+# Apply the formula:
+# d = r* / r = ((r+1)/r)(n_(r+1)/n_r)
+# For example, for frequency = 5, d = (6/5) * (N6/N5)
+# N5: number of 3-grams that have frequency of 5.
+# Supposed: in 3-gram, only these 3-grams appear 5 times:
+#           A-B-C     5 times
+#           A-B-E     5 times
+#           X-Y-Z     5 times
+#           L-M-N     5 times
+# ==> we have N5 = 4
+# copy predicted or last word to base for sorting.
+unigrams$base <- unigrams$prediction
+
+create_n_GramTableExtended = function(my_ngram){
+  # add a "discount" column.
+    my_ngram$discount = rep(1, nrow(my_ngram))
+  
+  # Calculate the discount coefficient.
+  # We only consider n-grams that have 0 < frequency <= k (5). 
+
+    for(i in 5:1){
+      currRTimes <-i
+      nextRTimes <- currRTimes + 1
+      
+      currN = nrow(my_ngram[frequency == currRTimes])
+      nextN = nrow(my_ngram[frequency == nextRTimes])
+      
+      currd = (nextRTimes / currRTimes) * (nextN / currN) # assumption:0 < d < 1
+      
+      my_ngram[frequency == currRTimes, discount := currd]
+    }
+
+  my_ngram <- my_ngram[, prob :=  (discount*frequency)/sum(frequency), 
+                      by=base] %>%   setorder(base, -prob)
+  return(my_ngram)
+}
+  
+unigrams<- create_n_GramTableExtended(unigrams)
+bigrams <- create_n_GramTableExtended(bigrams)
+trigrams <- create_n_GramTableExtended(trigrams)
+tetragrams <- create_n_GramTableExtended(tetragrams)
+pentagrams <- create_n_GramTableExtended(pentagrams)
+hexagrams <- create_n_GramTableExtended(hexagrams)
+
+# Calculate the remaining probability (thanks to discounting...).
+unigrams_leftOverProb = unigrams[, .(leftoverprob=calcLeftOverProb(prediction,
+                                  frequency, discount)), by=base]
+bigrams_leftOverProb = bigrams[, .(leftoverprob=calcLeftOverProb(prediction,
+                                  frequency, discount)), by=base]
+
+trigrams_leftOverProb = trigrams[, .(leftoverprob=calcLeftOverProb(prediction,
+                                  frequency, discount)), by=base]
+
+tetragrams_leftOverProb = tetragrams[, .(leftoverprob=calcLeftOverProb(prediction,
+                                  frequency, discount)), by=base]
+
+pentagrams_leftOverProb = pentagrams[, .(leftoverprob=calcLeftOverProb(prediction,
+                                  frequency, discount)), by=base]
+
+hexagrams_leftOverProb = hexagrams[, .(leftoverprob=calcLeftOverProb(prediction,
+                                  frequency, discount)), by=base]
+
+
+```
+
+
+
+```{r create_pred, cache=TRUE, warning=FALSE}
+
+inputString <- "adam sandler's"
+inputString <- str_replace_all(inputString,"[\\s]+", "_")
+stringPred <- trigrams[base == inputString,]
+pred <- stringPred[1:100, prediction]
+pred
+#rm(stringPred, pred)
+
+```
+
+
+
+```{r morefunc}
+# this function is used to extract terms.
+# Input: "A_B_C"
+#        "X_Y_Z"
+# Output: firstTerms  lastTerm
+#         "A_B"       "C"
+#         "X_Y"       "Z"
+separateTerms = function(x){
+    # Pre-allocate
+    firstTerms = character(length(x))
+    lastTerm = character(length(x))
+    
+    for(i in 1:length(x)){
+        posOfSpaces = gregexpr("_", x[i])[[1]]
+        posOfLastSpace = posOfSpaces[length(posOfSpaces)]
+        firstTerms[i] = substr(x[i], 1, posOfLastSpace-1)
+        lastTerm[i] = substr(x[i], posOfLastSpace+1, nchar(x[i]))
+    }
+    
+    list(firstTerms=firstTerms, lastTerm=lastTerm)
+}
+
+################################################################################
+# This function is used to get the last "num" terms of a given text.
+# Input: We are students of the university
+# Output: of_the_university (if num = 3)
+getLastTerms = function(inputString, num = 3){
+    # Preprocessing
+    inputString = gsub("[[:space:]]+", " ", str_trim(tolower(inputString)))
+    
+    # Now, ready!
+    words = unlist(strsplit(inputString, " "))
+    
+    if (length(words) < num){
+        stop("Number of Last Terms: Insufficient!")
+    }
+    
+    from = length(words)-num+1
+    to = length(words)
+    tempWords = words[from:to]
+    
+    paste(tempWords, collapse="_")
+}
+
+
+```
+
+
+
+
+```{r KatzBackOff}
+################################################################################
+# This function is used to get the probability of a given text, using Katz Backoff (with Good-Turing Discounting).
+
+getProbabilityFrom3Gram = function(inputString){
+    # Preprocessing
+    mylist = separateTerms(getLastTerms(inputString, num = 3))
+    inFirstTerms3gram = mylist$firstTerms
+    inLastTerm3gram = mylist$lastTerm
+    
+    finalProb = -1
+    
+    oneGroupIn3Gram = threeGramTable[firstTerms == inFirstTerms3gram]
+    if (nrow(oneGroupIn3Gram) > 0){
+        # Algorithm here
+        oneRecordIn3Gram = threeGramTable[firstTerms == inFirstTerms3gram & lastTerm == inLastTerm3gram]
+        if (nrow(oneRecordIn3Gram) > 0){
+            # We found one in 3-gram
+            all_freq = sum(oneGroupIn3Gram$frequency)
+            finalProb = ((oneRecordIn3Gram$discount * oneRecordIn3Gram$frequency) / all_freq)
+            ### We're done!
+        } else {
+            # NOT found in 3-gram => check 2-gram & 1-gram
+            mylist = separateTerms(getLastTerms(inputString, num = 2))
+            inFirstTerms2gram = mylist$firstTerms
+            inLastTerm2gram = mylist$lastTerm
+            
+            # Get the left-over probability so that we can distribute it for lower-order grams.
+            beta_leftoverprob = threeGramTable_leftOverProb[firstTerms == inFirstTerms3gram]$leftoverprob
+            
+            oneGroupIn2Gram = twoGramTable[firstTerms == inFirstTerms2gram]
+            oneRecordIn2Gram = twoGramTable[firstTerms == inFirstTerms2gram & lastTerm == inLastTerm2gram]
+            if (nrow(oneRecordIn2Gram) > 0){
+                # We found one in 2-gram!
+                # We only consider ones that do not appear in 3-grams...
+                oneGroupIn2Gram_Remain = oneGroupIn2Gram[!(oneGroupIn2Gram$lastTerm %in% oneGroupIn3Gram$lastTerm)]
+                all_freq = sum(oneGroupIn2Gram$frequency)
+                
+                alpha = beta_leftoverprob / sum((oneGroupIn2Gram_Remain$frequency * oneGroupIn2Gram_Remain$discount) / all_freq)
+                
+                finalProb = alpha * ((oneRecordIn2Gram$frequency * oneRecordIn2Gram$discount ) / all_freq)
+                ### We're done!
+            } else {
+                # We only have hope in 1-gram!
+                oneGroupIn1Gram = oneGramTable # we don't have "firstTerms" here!
+                oneRecordIn1Gram = oneGramTable[lastTerm == inLastTerm2gram] # what if this returns "zero" row?
+                
+                oneGroupIn1Gram_Remain = oneGroupIn1Gram[!(oneGroupIn1Gram$lastTerm %in% oneGroupIn3Gram$lastTerm)]
+                all_freq = sum(oneGroupIn1Gram$frequency)
+                
+                alpha = beta_leftoverprob / sum((oneGroupIn1Gram_Remain$frequency * oneGroupIn1Gram_Remain$discount) / all_freq)
+                
+                finalProb = alpha * ((oneRecordIn1Gram$frequency * oneRecordIn1Gram$discount) / all_freq)
+                ### We're done!
+            }
+        }
+    } else {
+        stop(sprintf("[%s] not found in the 3-gram model.", inFirstTerms3gram))
+        # The workaround could be:
+        # + Write another function in which we primarily use 2-gram with support from 1-gram.
+        # + Increase the corpus size so that the 3-gram can capture more diversity of words...
+    }
+    
+    finalProb
+}
+
+```
+so it is spitting out probabilities how do I know if they are right
+
+# Appendix
+
+ 
+```{r ref.label="setup",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="load_data",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="import",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="tidydata",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="keepstopwords",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="create_ngrams",eval=FALSE, echo=TRUE, results='markup'}
+```

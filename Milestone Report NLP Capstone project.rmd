@@ -1,0 +1,262 @@
+---
+title: "Milestone Report NLP Capstone project"
+author: "Diane Leigh"
+date: "September 3, 2017"
+output: html_document
+---
+
+# Executive Summary
+Around the world, people are spending an increasing amount of time on their mobile devices for email, social networking, banking and a whole range of other activities. But typing on mobile devices can be a serious pain. SwiftKey, our corporate partner in this capstone, builds a smart keyboard that makes it easier for people to type on their mobile devices. One cornerstone of their smart keyboard is predictive text models. When someone types:
+
+I went to the
+
+the keyboard presents three options for what the next word might be. For example, the three words might be gym, store, restaurant. The purpose of this capstone is to  work on understanding and building predictive text models like those used by SwiftKey.
+
+A Common Natural Language Processing (NLP) method, n-grams, (a contiguous sequence of n items from a given sequence of text or speech) is used. Uni-, bi-, tri- and tetra-grams are generated from the corpus(a collection of written texts) provided by Swiftkey. This report provides basic characteristics of the corpus as well as some insight into how the predictive model will be built. Code for this processing is available in the Appendix.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# ipak function: install and load multiple R packages.
+# check to see if packages are installed. Install them if they are not, then load them into the R session.
+
+ipak <- function(pkg){
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg)) 
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+}
+packages <- c("tidyverse", "quanteda", "data.table", "DT", "tm", "stringi", "R.utils")
+ipak(packages)
+
+
+```
+## Download SwiftKey data.
+
+The first step was to download and "unzip" the data files from Swiftkey. This data includes a larg number of samples of blogs, news and tweets as separate files. 
+
+```{r load_data, results="asis", cache=TRUE}
+
+# Download SwiftKey data
+
+fileUrl <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+
+if(!file.exists("Coursera-Swiftkey.zip")){
+  temp <- "Coursera-Swiftkey.zip"
+  download.file(fileUrl, temp)
+  DateDataDownloaded <- date()
+  saveRDS(DateDataDownloaded, file="DateDataDownloaded.rds")
+  unzip(temp)
+}else {
+  DateDataDownloaded <- readRDS("DateDataDownloaded.rds")
+} 
+
+```
+
+The data was downloaded on `r DateDataDownloaded`.
+
+## Import and sampling of the data
+
+Once the Data had been downloaded and unzipped into the Data_Science_Capstone folder. The rbinom function was used to sample 2% of the lines in each file and combine them into a single corpus for exploratory analysis. 
+
+```{r import, warning=FALSE, cache=TRUE, results="asis"}
+
+# Import and sampling of the data
+
+if(!file.exists("./datafiles/corpusdata.RData")){
+  ds <- DirSource("./final/en_US")
+  drfnm <- dir("./final/en_US")
+  flInfo <- data.frame()
+  sampInfo <- data.frame()
+    j=0
+  for(i in drfnm) {
+    j=j+1
+    flInfo[j,1] <- drfnm[j]
+    flInfo[j,2] <- round(file.info(ds$filelist[j])$size / 1024^2, digits = 0) # Megabytes
+    fnm <- file(ds$filelist[j], open="rb")
+    y <- readLines(fnm, encoding = "UTF-8", skipNul=TRUE)
+    flInfo[j,3] <- length(y)
+    close(fnm)
+    set.seed(3948)
+    x <- y[rbinom(n = length(y), size = 1, prob = 0.02) == 1]
+    flInfo[j,4] <- sum(stri_count_words(y))
+    flInfo[j,5] <- max(nchar(y))
+    if (grepl(".blog.*", i)){
+      assign("blogs",x) 
+      sampInfo[j,1] <- "blogs"
+    }
+    else if (grepl(".news.*", i)){
+      assign("news",x)
+      sampInfo[j,1] <- "news"
+    }
+    else if (grepl(".twitter.*", i)){
+      assign("twitter",x) 
+      sampInfo[j,1] <- "twitter"
+    }
+    sampInfo[j,2] <- length(x)
+    sampInfo[j,3] <- sum(stri_count_words(x))
+    sampInfo[j,4] <- max(nchar(x))
+  }
+  colnames(flInfo) <- c("File_Name", "Size_(MB)", "Num_of_Lines", "Num_of_Words", "Max_Characters")
+  colnames(sampInfo) <- c("File_Name", "Num_of_Lines", "Num_of_Words", "Max_Characters")
+  #combine sampled lines from blogs, news and twitter into one corpus
+  mycorpusblogs <- corpus(blogs)
+  docvars(mycorpusblogs, "Source") <- "Blog"
+  mycorpusnews <- corpus(news)
+  docvars(mycorpusnews, "Source") <- "News"
+  mycorpustwitter <- corpus(twitter)
+  docvars(mycorpustwitter, "Source") <- "Tweet"
+  corpusdata <- mycorpusblogs + mycorpusnews + mycorpustwitter
+  #save the sampled data to RData files, I have saved each data type blog, news and twitter individually as well as the compilation. 
+  mkdirs("datafiles")
+  saveRDS(mycorpusblogs, "./datafiles/mycorpusblogs.RData")
+  saveRDS(mycorpusnews, "./datafiles/mycorpusnews.RData")
+  saveRDS(mycorpustwitter, "./datafiles/mycorpustwitter.RData")
+  saveRDS(corpusdata, "./datafiles/corpusdata.RData")
+  saveRDS(flInfo, file = "./datafiles/flInfo.RData")
+  saveRDS(sampInfo, file = "./datafiles/sampInfo.RData")
+  # clean environment
+  rm(drfnm, ds, fnm, i, j, x, y, news, twitter, blogs, mycorpusblogs, mycorpusnews, mycorpustwitter)
+}else {
+  corpusdata <- readRDS("./datafiles/corpusdata.RData")
+  flInfo <- readRDS("./datafiles/flInfo.RData")
+  sampInfo <- readRDS("./datafiles/sampInfo.RData")
+}
+
+
+```
+`r datatable(flInfo, options = list(dom = 't'))`
+
+`r datatable(sampInfo, options = list(dom = 't'))`
+
+
+# Cleaning the data
+
+The package "quanteda" was used to clean up the data, removing stopwords, profanity, numbers, punctuation, separators and URLs. 
+
+```{r tidydata, warnings=FALSE, cache=TRUE}
+
+# Cleaning the data
+
+# convert variables to data frames, one line per row, remove stopwords,  profanity, numbers, punctuation, separators and URLs.
+
+if(!file.exists("profanity.txt")){
+  fileUrl<- "https://www.cs.cmu.edu/~biglou/resources/bad-words.txt"
+  temp <- "profanity.txt"
+  download.file(fileUrl, temp)
+}
+
+profanity <- readLines("profanity.txt")
+
+totdfm <- dfm(corpusdata, remove = c(stopwords("english"), profanity),
+       remove_numbers = TRUE, remove_punct = TRUE, remove_separators = TRUE,
+       remove_url=TRUE, include_docvars = TRUE)
+
+totfrq <- as.data.table(docfreq(totdfm), keep.rownames = TRUE) %>%  
+     setnames(c("V1","V2"), c("word", "n")) %>% setorder(-n)
+
+# plot word frequencies
+
+tot_frq <- totfrq[1:20] %>% mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) + geom_col() + xlab(NULL) + coord_flip() +
+  ggtitle("Figure 1: 20 Most Frequently used Words in our Courpus Excluding Stop Words") 
+
+tot_frq
+
+```
+
+A frequency plot was created for individual words, excluding the "stop words" ( commonly used words (such as "the") that a search engine has been programmed to ignore). Figures 1 shows the 20 Most Frequently used Words in the corpora. However since our goal is to predict the next word in a sequence, The "stop words" will be retained.
+```{r keepstopwords, warnings=FALSE, cache=TRUE}
+
+# convert variables to one word per line (tokenization) keeping stop words
+
+if(!file.exists("profanity.txt")){
+  fileUrl<- "https://www.cs.cmu.edu/~biglou/resources/bad-words.txt"
+  temp <- "profanity.txt"
+  download.file(fileUrl, temp)
+}
+
+profanity <- readLines("profanity.txt")
+
+totdfm <- tokenize(corpusdata, ngrams = 1,remove_numbers = TRUE,
+       remove_punct = TRUE, remove_separators = TRUE, remove_url=TRUE)
+
+```
+
+Since we are interested in predicting the next word, Uni-, Bi-, Tri- and Tetragrams (one, two, three, and four word groupings from the text) are generated for future analysis. Below are graphs showing the 20 most frequent n-grams, where n= 1, 2, 3 and 4 respectively.
+
+## Create Ngrams
+
+```{r create_ngrams, cache=TRUE}
+
+# Create Ngrams
+
+# function for extracting ngrams from tokenized corpus
+get_ngrams_freq <- function(my_tokens,ngram = 1L, name = "Unigram") {
+  tkz <- tokens_ngrams(my_tokens, concatenator = " ", n = ngram)
+  my_dfm <-  dfm(tkz)
+  rm(tkz)
+  DT_freq <- sort(colSums(my_dfm), decreasing = TRUE)
+  rm(my_dfm)
+  #if(verbose){
+  #  cat("Formatting ngram tables...\n")
+  #}
+  DT_freq  <-
+    data.table(Ngrams = names(DT_freq), Frequency = DT_freq)
+  frq_plot <- DT_freq[1:20] %>% 
+  mutate(Ngrams = reorder(Ngrams, Frequency)) %>%
+  ggplot(aes(Ngrams, Frequency)) + geom_col() + xlab(NULL) + coord_flip() +
+  labs(title = paste("Figure ", ngram + 1,": 20 Most Frequent", name, "in our Corpus")) 
+
+  
+  return(frq_plot)
+}
+
+tetra_tot <- get_ngrams_freq(totdfm, ngram = 4L, "Tetragrams")
+tri_tot <-  get_ngrams_freq(totdfm, ngram = 3L, "Trigrams")
+bi_tot <-  get_ngrams_freq(totdfm, ngram = 2L, "Bigrams")
+uni_tot <-  get_ngrams_freq(totdfm, ngram = 1L, "Unigrams")
+
+# plot word frequencies
+
+uni_tot
+bi_tot
+tri_tot
+tetra_tot
+
+```
+
+# Plan for Predictive Model
+I will be exploring various techniques commonly used in NLP to define my next word prediction model.
+
+* Kneser Ney smoothing
+* stupid backoff model
+* Maximum Likelihood Estimation
+* Laplace’s, Lidstone’s and Jeffreys-Perks’ Laws
+* Held Out Estimation
+* Cross-Validation
+* Good-Turing Estimation
+
+I have a lot of reading to do!
+
+
+# Appendix
+
+ 
+```{r ref.label="setup",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="load_data",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="import",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="tidydata",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="keepstopwords",eval=FALSE, echo=TRUE, results='markup'}
+```
+
+```{r ref.label="create_ngrams",eval=FALSE, echo=TRUE, results='markup'}
+```
